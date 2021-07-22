@@ -43,9 +43,7 @@ function build_tree(
         min_samples_leaf    = Int(min_samples_leaf),
         min_samples_split   = Int(min_samples_split),
         min_purity_increase = Float64(min_purity_increase),
-        rng                 = rng,
-        adj                 = adj
-        )
+        rng                 = rng)
 
     return _convert(t.root, labels[t.labels])
 end
