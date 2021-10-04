@@ -22,7 +22,9 @@ function build_tree(
         min_samples_leaf    = 5,
         min_samples_split   = 2,
         min_purity_increase = 0.0;
-        rng                 = Random.GLOBAL_RNG) where {S, T <: Float64}
+        rng                 = Random.GLOBAL_RNG,
+        adj                 = nothing,
+        ) where {S, T <: Float64}
 
     if max_depth == -1
         max_depth = typemax(Int)
@@ -56,7 +58,8 @@ function build_forest(
         min_samples_leaf    = 5,
         min_samples_split   = 2,
         min_purity_increase = 0.0;
-        rng                 = Random.GLOBAL_RNG) where {S, T <: Float64}
+        rng                 = Random.GLOBAL_RNG,
+        adj                 = nothing) where {S, T <: Float64}
 
     if n_trees < 1
         throw("the number of trees must be >= 1")
@@ -86,7 +89,8 @@ function build_forest(
                 min_samples_leaf,
                 min_samples_split,
                 min_purity_increase,
-                rng = rng)
+                rng=rng,
+                adj=adj)
         end
     elseif rng isa Integer # each thread gets its own seeded rng
         Threads.@threads for i in 1:n_trees
@@ -99,7 +103,8 @@ function build_forest(
                 max_depth,
                 min_samples_leaf,
                 min_samples_split,
-                min_purity_increase)
+                min_purity_increase,
+                adj=adj)
         end
     else
         throw("rng must of be type Integer or Random.AbstractRNG")

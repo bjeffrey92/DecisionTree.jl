@@ -32,6 +32,49 @@ module treeregressor
         node.is_leaf = false
         node
     end
+end
+
+struct Tree{S}
+    root::NodeMeta{S}
+    labels::Vector{Int}
+end
+
+# find an optimal split that satisfy the given constraints
+# (max_depth, min_samples_split, min_purity_increase)
+function _split!(
+    X::AbstractMatrix{S}, # the feature array
+    Y::AbstractVector{Float64}, # the label array
+    W::AbstractVector{U},
+    node::NodeMeta{S}, # the node to split    
+    max_features::Int, # number of features to consider
+    max_depth::Int, # the maximum depth of the resultant tree
+    min_samples_leaf::Int, # the minimum number of samples each leaf needs to have
+    min_samples_split::Int, # the minimum number of samples in needed for a split
+    min_purity_increase::Float64, # minimum purity needed for a split
+    indX::AbstractVector{Int}, # an array of sample indices,
+    # we split using samples in indX[node.region]
+    # the two arrays below are given for optimization purposes    
+    Xf::AbstractVector{S},
+    Yf::AbstractVector{Float64},
+    Wf::AbstractVector{U},
+    rng::Random.AbstractRNG) where {S,U}
+
+    region = node.region
+    n_samples = length(region)
+    r_start = region.start - 1
+
+    @inbounds @simd for i = 1:n_samples
+        Yf[i] = Y[indX[i+r_start]]
+        Wf[i] = W[indX[i+r_start]]
+    end
+
+    tssq = zero(U)
+    tsum = zero(U)
+    wsum = zero(U)
+    @inbounds @simd for i = 1:n_samples
+        tssq += Wf[i] * Yf[i] * Yf[i]
+        tsum += Wf[i] * Yf[i]
+        wsum += Wf[i]
     end
 
     struct Tree{S}
@@ -39,33 +82,39 @@ module treeregressor
         labels :: Vector{Int}
     end
 
-    # find an optimal split that satisfy the given constraints
-    # (max_depth, min_samples_split, min_purity_increase)
-    function _split!(
-            X                   :: AbstractMatrix{S}, # the feature array
-            Y                   :: AbstractVector{Float64}, # the label array
-            W                   :: AbstractVector{U},
-            node                :: NodeMeta{S}, # the node to split
-            max_features        :: Int, # number of features to consider
-            max_depth           :: Int, # the maximum depth of the resultant tree
-            min_samples_leaf    :: Int, # the minimum number of samples each leaf needs to have
-            min_samples_split   :: Int, # the minimum number of samples in needed for a split
-            min_purity_increase :: Float64, # minimum purity needed for a split
-            indX                :: AbstractVector{Int}, # an array of sample indices,
-                                                # we split using samples in indX[node.region]
-            # the two arrays below are given for optimization purposes
-            Xf                  :: AbstractVector{S},
-            Yf                  :: AbstractVector{Float64},
-            Wf                  :: AbstractVector{U},
-            rng                 :: Random.AbstractRNG) where {S, U}
+    features = node.features
+    n_features = length(features)
+    best_purity = typemin(U)
+    best_feature = -1
+    threshold_lo = X[1]
+    threshold_hi = X[1]
 
-        region = node.region
-        n_samples = length(region)
-        r_start = region.start - 1
+    indf = 1
+    # the number of new constants found during this split
+    n_constant = 0
+    # true if every feature is constant
+    unsplittable = true
+    # the number of non constant features we will see if
+    # only sample n_features used features
+    # is a hypergeometric random variable
+    total_features = size(X, 2)
 
-        @inbounds @simd for i in 1:n_samples
-            Yf[i] = Y[indX[i + r_start]]
-            Wf[i] = W[indX[i + r_start]]
+    # this is the total number of features that we expect to not
+    # be one of the known constant features. since we know exactly
+    # what the non constant features are, we can sample at 'non_constants_used'
+    # non constant features instead of going through every feature randomly.
+    non_constants_used = util.hypergeometric(
+        n_features, 
+        total_features - n_features, 
+        max_features, 
+        rng
+    )
+    @inbounds while (
+        unsplittable || indf <= non_constants_used) && indf <= n_features
+        feature = let
+            indr = rand(rng, indf:n_features)
+            features[indf], features[indr] = features[indr], features[indf]
+            features[indf]
         end
 
         tssq = zero(U)
@@ -259,29 +308,35 @@ module treeregressor
         end
     end
 
-    function _fit(
-            X                     :: AbstractMatrix{S},
-            Y                     :: AbstractVector{Float64},
-            W                     :: AbstractVector{U},
-            max_features          :: Int,
-            max_depth             :: Int,
-            min_samples_leaf      :: Int,
-            min_samples_split     :: Int,
-            min_purity_increase   :: Float64,
-            rng=Random.GLOBAL_RNG :: Random.AbstractRNG) where {S, U}
+function _fit(
+    X::AbstractMatrix{S}, # feature matrix
+    Y::AbstractVector{Float64}, # labels
+    W::AbstractVector{U}, # weights
+    max_features::Int,
+    max_depth::Int,
+    min_samples_leaf::Int,
+    min_samples_split::Int,
+    min_purity_increase::Float64,
+    rng = Random.GLOBAL_RNG::Random.AbstractRNG,
+    adj::Union{AbstractMatrix{Int}, Nothing} = nothing,
+) where {S,U}
 
-        n_samples, n_features = size(X)
+    n_samples, n_features = size(X)
 
-        Yf  = Array{Float64}(undef, n_samples)
-        Xf  = Array{S}(undef, n_samples)
-        Wf  = Array{U}(undef, n_samples)
+    Yf = Array{Float64}(undef, n_samples)
+    Xf = Array{S}(undef, n_samples)
+    Wf = Array{U}(undef, n_samples)
 
-        indX = collect(1:n_samples)
-        root = NodeMeta{S}(collect(1:n_features), 1:n_samples, 0)
-        stack = NodeMeta{S}[root]
+    indX = collect(1:n_samples)
+    root = NodeMeta{S}(collect(1:n_features), 1:n_samples, 0)
+    stack = NodeMeta{S}[root]
 
-        @inbounds while length(stack) > 0
-            node = pop!(stack)
+    # keep track of features in the tree
+    tree_features = Vector{Int}()
+
+    @inbounds while length(stack) > 0
+        node = pop!(stack)
+        if node == root || isnothing(adj)
             _split!(
                 X, Y, W,
                 node,
@@ -291,13 +346,47 @@ module treeregressor
                 min_samples_split,
                 min_purity_increase,
                 indX,
-                Xf, Yf, Wf,
-                rng)
-            if !node.is_leaf
-                fork!(node)
-                push!(stack, node.r)
-                push!(stack, node.l)
+                Xf,
+                Yf,
+                Wf,
+                rng,
+            )
+        else
+            # get the features which are next to the features already used 
+            # in the tree
+            features_adj = adj[unique(tree_features),:]
+            adjacent_features = [i[2] for i in findall(!iszero, features_adj)]
+
+            # if there aren't adjacent features call the node a leaf and move
+            # on. Otherwise attempt to split the node on one of the adjacent
+            # features
+            if length(adjacent_features) == 0
+                node.is_leaf = true
+            else
+                node.features = unique(vcat(tree_features, adjacent_features))
+                _split!(
+                    X,
+                    Y,
+                    W,
+                    node,
+                    max_features,
+                    max_depth,
+                    min_samples_leaf,
+                    min_samples_split,
+                    min_purity_increase,
+                    indX,
+                    Xf,
+                    Yf,
+                    Wf,
+                    rng,
+                    )
             end
+        end
+        if !node.is_leaf
+            push!(tree_features, node.feature)
+            fork!(node)
+            push!(stack, node.r)
+            push!(stack, node.l)
         end
         return (root, indX)
     end
