@@ -21,16 +21,14 @@ mutable struct NodeMeta{S}
     region::UnitRange{Int} # a slice of the samples used to decide the split of the node
     features::Vector{Int}    # a list of features not known to be constant
     split_at::Int            # index of samples
-    function NodeMeta{S}(
-        features::Vector{Int},
-        region::UnitRange{Int},
-        depth::Int,
-    ) where {S}
+    parent_features::Vector{Int} # features that parent nodes in the tree are split on
+    function NodeMeta{S}(features::Vector{Int}, region::UnitRange{Int}, depth::Int, parent_features::Vector{Int}) where {S}
         node = new{S}()
         node.depth = depth
         node.region = region
         node.features = features
         node.is_leaf = false
+        node.parent_features = parent_features
         node
     end
 end
@@ -113,14 +111,8 @@ function _split!(
     # be one of the known constant features. since we know exactly
     # what the non constant features are, we can sample at 'non_constants_used'
     # non constant features instead of going through every feature randomly.
-    non_constants_used = util.hypergeometric(
-        n_features, 
-        total_features - n_features, 
-        max_features, 
-        rng
-    )
-    @inbounds while (
-        unsplittable || indf <= non_constants_used) && indf <= n_features
+    non_constants_used = util.hypergeometric(n_features, total_features - n_features, max_features, rng)
+    @inbounds while (unsplittable || indf <= non_constants_used) && indf <= n_features
         feature = let
             indr = rand(rng, indf:n_features)
             features[indf], features[indr] = features[indr], features[indf]
@@ -204,9 +196,7 @@ function _split!(
     end
 
     # no splits honor min_samples_leaf
-    @inbounds if (
-        unsplittable || best_purity - tsum * node.label < min_purity_increase * wsum
-    )
+    @inbounds if (unsplittable || best_purity - tsum * node.label < min_purity_increase * wsum)
         node.is_leaf = true
         return
     else
@@ -235,9 +225,12 @@ end
     ind = node.split_at
     region = node.region
     features = node.features
+    
+    left_parent_features = push!(deepcopy(node.parent_features), node.feature)
+    right_parent_features = deepcopy(left_parent_features)
     # no need to copy because we will copy at the end
-    node.l = NodeMeta{S}(features, region[1:ind], node.depth + 1)
-    node.r = NodeMeta{S}(features, region[ind+1:end], node.depth + 1)
+    node.l = NodeMeta{S}(features, region[1:ind], node.depth + 1, left_parent_features)
+    node.r = NodeMeta{S}(features, region[ind+1:end], node.depth + 1, right_parent_features)
 end
 
 function check_input(
@@ -249,7 +242,7 @@ function check_input(
     min_samples_leaf::Int,
     min_samples_split::Int,
     min_purity_increase::Float64,
-    adj::Union{AbstractMatrix{Int}, Nothing} = nothing,
+    adj::Union{AbstractMatrix{Int},Nothing} = nothing,
 ) where {S,T,U}
     n_samples, n_features = size(X)
     if length(Y) != n_samples
@@ -262,16 +255,11 @@ function check_input(
             " max_depth >= 0, or max_depth = -1 for infinite depth)",
         )
     elseif n_features < max_features
-        throw(
-            "number of features $(n_features) is less than the number " *
-            "of max features $(max_features)",
-        )
+        throw("number of features $(n_features) is less than the number " * "of max features $(max_features)")
     elseif max_features < 0
         throw("number of features $(max_features) must be >= zero ")
     elseif min_samples_leaf < 1
-        throw(
-            "min_samples_leaf must be a positive integer " * "(given $(min_samples_leaf))",
-        )
+        throw("min_samples_leaf must be a positive integer " * "(given $(min_samples_leaf))")
     elseif min_samples_split < 2
         throw("min_samples_split must be at least 2 " * "(given $(min_samples_split))")
     elseif !isnothing(adj) && adj != transpose(adj)
@@ -289,7 +277,7 @@ function _fit(
     min_samples_split::Int,
     min_purity_increase::Float64,
     rng = Random.GLOBAL_RNG::Random.AbstractRNG,
-    adj::Union{AbstractMatrix{Int}, Nothing} = nothing,
+    adj::Union{AbstractMatrix{Int},Nothing} = nothing,
 ) where {S,U}
 
     n_samples, n_features = size(X)
@@ -299,11 +287,8 @@ function _fit(
     Wf = Array{U}(undef, n_samples)
 
     indX = collect(1:n_samples)
-    root = NodeMeta{S}(collect(1:n_features), 1:n_samples, 0)
+    root = NodeMeta{S}(collect(1:n_features), 1:n_samples, 0, Vector{Int}())
     stack = NodeMeta{S}[root]
-
-    # keep track of features in the tree
-    tree_features = Vector{Int}()
 
     @inbounds while length(stack) > 0
         node = pop!(stack)
@@ -327,7 +312,7 @@ function _fit(
         else
             # get the features which are next to the features already used 
             # in the tree
-            features_adj = adj[unique(tree_features),:]
+            features_adj = adj[unique(node.parent_features), :]
             adjacent_features = [i[2] for i in findall(!iszero, features_adj)]
 
             # if there aren't adjacent features call the node a leaf and move
@@ -336,7 +321,7 @@ function _fit(
             if length(adjacent_features) == 0
                 node.is_leaf = true
             else
-                node.features = unique(vcat(tree_features, adjacent_features))
+                node.features = unique(vcat(node.parent_features, adjacent_features))
                 _split!(
                     X,
                     Y,
@@ -352,11 +337,10 @@ function _fit(
                     Yf,
                     Wf,
                     rng,
-                    )
+                )
             end
         end
         if !node.is_leaf
-            push!(tree_features, node.feature)
             fork!(node)
             push!(stack, node.r)
             push!(stack, node.l)
@@ -375,7 +359,7 @@ function fit(;
     min_samples_split::Int,
     min_purity_increase::Float64,
     rng = Random.GLOBAL_RNG::Random.AbstractRNG,
-    adj::Union{AbstractMatrix{Int}, Nothing} = nothing,
+    adj::Union{AbstractMatrix{Int},Nothing} = nothing,
 ) where {S,U}
 
     n_samples, n_features = size(X)
@@ -383,30 +367,10 @@ function fit(;
         W = fill(1.0, n_samples)
     end
 
-    check_input(
-        X,
-        Y,
-        W,
-        max_features,
-        max_depth,
-        min_samples_leaf,
-        min_samples_split,
-        min_purity_increase,
-        adj,
-    )
+    check_input(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, adj)
 
-    root, indX = _fit(
-        X,
-        Y,
-        W,
-        max_features,
-        max_depth,
-        min_samples_leaf,
-        min_samples_split,
-        min_purity_increase,
-        rng,
-        adj,
-    )
+    root, indX =
+        _fit(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, rng, adj)
 
     return Tree{S}(root, indX)
 
