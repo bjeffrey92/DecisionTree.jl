@@ -14,6 +14,15 @@ function build_stump(labels::AbstractVector{T}, features::AbstractMatrix{S}; rng
     return build_tree(labels, features, 0, 1)
 end
 
+function parse_sparse_adj_matrix_indices(indices)
+    adj_dict = Dict()
+    for i in unique(indices[1,:])
+        adj_dict[i] = indices[2,indices[1,:] .== i]
+    end
+    return adj_dict
+end
+
+
 function build_tree(
         labels             :: AbstractVector{T},
         features           :: AbstractMatrix{S},
@@ -24,6 +33,7 @@ function build_tree(
         min_purity_increase = 0.0;
         rng                 = Random.GLOBAL_RNG,
         adj                 = nothing,
+        sparse_adj          = nothing,
         ) where {S, T <: Float64}
 
     if max_depth == -1
@@ -43,7 +53,9 @@ function build_tree(
         min_samples_leaf    = Int(min_samples_leaf),
         min_samples_split   = Int(min_samples_split),
         min_purity_increase = Float64(min_purity_increase),
-        rng                 = rng)
+        rng                 = rng,
+        adj                 = adj,
+        sparse_adj          = sparse_adj)
 
     return _convert(t.root, labels[t.labels])
 end
@@ -59,7 +71,8 @@ function build_forest(
         min_samples_split   = 2,
         min_purity_increase = 0.0;
         rng                 = Random.GLOBAL_RNG,
-        adj                 = nothing) where {S, T <: Float64}
+        adj                 = nothing,
+        sparse_adj          = nothing) where {S, T <: Float64}
 
     if n_trees < 1
         throw("the number of trees must be >= 1")
@@ -78,6 +91,10 @@ function build_forest(
 
     forest = Vector{LeafOrNode{S, T}}(undef, n_trees)
 
+    if !isnothing(sparse_adj) & isnothing(adj)
+        adj_dict = parse_sparse_adj_matrix_indices(sparse_adj)
+    end
+
     if rng isa Random.AbstractRNG
         Threads.@threads for i in 1:n_trees
             inds = rand(rng, 1:t_samples, n_samples)
@@ -90,7 +107,8 @@ function build_forest(
                 min_samples_split,
                 min_purity_increase,
                 rng=rng,
-                adj=adj)
+                adj=adj,
+                sparse_adj=adj_dict)
         end
     elseif rng isa Integer # each thread gets its own seeded rng
         Threads.@threads for i in 1:n_trees
@@ -104,7 +122,8 @@ function build_forest(
                 min_samples_leaf,
                 min_samples_split,
                 min_purity_increase,
-                adj=adj)
+                adj=adj,
+                sparse_adj=adj_dict)
         end
     else
         throw("rng must of be type Integer or Random.AbstractRNG")

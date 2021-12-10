@@ -278,6 +278,7 @@ function _fit(
     min_purity_increase::Float64,
     rng = Random.GLOBAL_RNG::Random.AbstractRNG,
     adj::Union{AbstractMatrix{Int},Nothing} = nothing,
+    sparse_adj = nothing,
 ) where {S,U}
 
     n_samples, n_features = size(X)
@@ -292,7 +293,7 @@ function _fit(
 
     @inbounds while length(stack) > 0
         node = pop!(stack)
-        if node == root || isnothing(adj)
+        if node == root || (isnothing(adj) & isnothing(sparse_adj))
             _split!(
                 X,
                 Y,
@@ -312,8 +313,17 @@ function _fit(
         else
             # get the features which are next to the features already used 
             # in the tree
-            features_adj = adj[unique(node.parent_features), :]
-            adjacent_features = [i[2] for i in findall(!iszero, features_adj)]
+            if !isnothing(sparse_adj)
+                adjacent_features = unique(
+                    reduce(
+                        append!,
+                        (sparse_adj[i] for i in node.parent_features),
+                        init=[])
+                )
+            else
+                features_adj = adj[unique(node.parent_features), :]
+                adjacent_features = [i[2] for i in findall(!iszero, features_adj)]
+            end
 
             # if there aren't adjacent features call the node a leaf and move
             # on. Otherwise attempt to split the node on one of the adjacent
@@ -360,6 +370,7 @@ function fit(;
     min_purity_increase::Float64,
     rng = Random.GLOBAL_RNG::Random.AbstractRNG,
     adj::Union{AbstractMatrix{Int},Nothing} = nothing,
+    sparse_adj = nothing,
 ) where {S,U}
 
     n_samples, n_features = size(X)
@@ -370,7 +381,7 @@ function fit(;
     check_input(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, adj)
 
     root, indX =
-        _fit(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, rng, adj)
+        _fit(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, rng, adj, sparse_adj)
 
     return Tree{S}(root, indX)
 
