@@ -8,6 +8,7 @@ module treeregressor
 include("../util.jl")
 
 import Random
+import Distributions
 export fit
 
 mutable struct NodeMeta{S}
@@ -279,6 +280,7 @@ function _fit(
     rng = Random.GLOBAL_RNG::Random.AbstractRNG,
     adj::Union{AbstractMatrix{Int},Nothing} = nothing,
     sparse_adj = nothing,
+    jump_probability = nothing,
 ) where {S,U}
 
     n_samples, n_features = size(X)
@@ -311,9 +313,11 @@ function _fit(
                 rng,
             )
         else
+            if !isnothing(jump_probability) & (jump_probability > rand(Distributions.Uniform()))
+                adjacent_features = root.features
             # get the features which are next to the features already used 
             # in the tree
-            if !isnothing(sparse_adj)
+            elseif !isnothing(sparse_adj)
                 adjacent_features = unique(
                     reduce(
                         append!,
@@ -371,6 +375,7 @@ function fit(;
     rng = Random.GLOBAL_RNG::Random.AbstractRNG,
     adj::Union{AbstractMatrix{Int},Nothing} = nothing,
     sparse_adj = nothing,
+    jump_probability = nothing,
 ) where {S,U}
 
     n_samples, n_features = size(X)
@@ -381,7 +386,7 @@ function fit(;
     check_input(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, adj)
 
     root, indX =
-        _fit(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, rng, adj, sparse_adj)
+        _fit(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, rng, adj, sparse_adj, jump_probability)
 
     return Tree{S}(root, indX)
 

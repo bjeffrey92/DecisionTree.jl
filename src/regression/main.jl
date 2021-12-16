@@ -34,6 +34,7 @@ function build_tree(
         rng                 = Random.GLOBAL_RNG,
         adj                 = nothing,
         sparse_adj          = nothing,
+        jump_probability    = nothing,
         ) where {S, T <: Float64}
 
     if max_depth == -1
@@ -55,7 +56,8 @@ function build_tree(
         min_purity_increase = Float64(min_purity_increase),
         rng                 = rng,
         adj                 = adj,
-        sparse_adj          = sparse_adj)
+        sparse_adj          = sparse_adj,
+        jump_probability    = jump_probability)
 
     return _convert(t.root, labels[t.labels])
 end
@@ -69,7 +71,8 @@ function build_forest(
         max_depth           = -1,
         min_samples_leaf    = 5,
         min_samples_split   = 2,
-        min_purity_increase = 0.0;
+        min_purity_increase = 0.0,
+        jump_probability    = nothing;
         rng                 = Random.GLOBAL_RNG,
         adj                 = nothing,
         sparse_adj          = nothing) where {S, T <: Float64}
@@ -108,7 +111,8 @@ function build_forest(
                 min_purity_increase,
                 rng=rng,
                 adj=adj,
-                sparse_adj=adj_dict)
+                sparse_adj=adj_dict,
+                jump_probability=jump_probability)
         end
     elseif rng isa Integer # each thread gets its own seeded rng
         Threads.@threads for i in 1:n_trees
@@ -123,7 +127,8 @@ function build_forest(
                 min_samples_split,
                 min_purity_increase,
                 adj=adj,
-                sparse_adj=adj_dict)
+                sparse_adj=adj_dict,
+                jump_probability=jump_probability)
         end
     else
         throw("rng must of be type Integer or Random.AbstractRNG")
