@@ -281,6 +281,7 @@ function _fit(
     adj::Union{AbstractMatrix{Int},Nothing} = nothing,
     sparse_adj = nothing,
     jump_probability = nothing,
+    graph_steps = 1,
 ) where {S,U}
 
     n_samples, n_features = size(X)
@@ -324,6 +325,16 @@ function _fit(
                         (sparse_adj[i] for i in node.parent_features),
                         init=[])
                 )
+                for _ in 2:graph_steps
+                    next_step_features = unique(
+                        reduce(
+                            append!,
+                            (sparse_adj[i] for i in adjacent_features),
+                            init=[])
+                    )
+                    append!(adjacent_features, next_step_features)
+                    unique!(adjacent_features)
+                end
             else
                 features_adj = adj[unique(node.parent_features), :]
                 adjacent_features = [i[2] for i in findall(!iszero, features_adj)]
@@ -376,6 +387,7 @@ function fit(;
     adj::Union{AbstractMatrix{Int},Nothing} = nothing,
     sparse_adj = nothing,
     jump_probability = nothing,
+    graph_steps = 1,
 ) where {S,U}
 
     n_samples, n_features = size(X)
@@ -386,7 +398,7 @@ function fit(;
     check_input(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, adj)
 
     root, indX =
-        _fit(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, rng, adj, sparse_adj, jump_probability)
+        _fit(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, rng, adj, sparse_adj, jump_probability, graph_steps)
 
     return Tree{S}(root, indX)
 

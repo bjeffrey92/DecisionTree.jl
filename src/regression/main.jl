@@ -35,6 +35,7 @@ function build_tree(
         adj                 = nothing,
         sparse_adj          = nothing,
         jump_probability    = nothing,
+        graph_steps         = 1,
         ) where {S, T <: Float64}
 
     if max_depth == -1
@@ -57,9 +58,14 @@ function build_tree(
         rng                 = rng,
         adj                 = adj,
         sparse_adj          = sparse_adj,
-        jump_probability    = jump_probability)
+        jump_probability    = jump_probability,
+        graph_steps         = graph_steps)
 
     return _convert(t.root, labels[t.labels])
+end
+
+function parse_adj_dict(adj_dict)
+    return Dict(convert(Int, i) => adj_dict[i] for i in keys(adj_dict))
 end
 
 function build_forest(
@@ -75,7 +81,8 @@ function build_forest(
         jump_probability    = nothing;
         rng                 = Random.GLOBAL_RNG,
         adj                 = nothing,
-        sparse_adj          = nothing) where {S, T <: Float64}
+        sparse_adj          = nothing,
+        graph_steps         = 1) where {S, T <: Float64}
 
     if n_trees < 1
         throw("the number of trees must be >= 1")
@@ -95,7 +102,7 @@ function build_forest(
     forest = Vector{LeafOrNode{S, T}}(undef, n_trees)
 
     if !isnothing(sparse_adj) & isnothing(adj)
-        adj_dict = parse_sparse_adj_matrix_indices(sparse_adj)
+        adj_dict = parse_adj_dict(sparse_adj)
     else
         adj_dict = nothing
     end
@@ -114,7 +121,8 @@ function build_forest(
                 rng=rng,
                 adj=adj,
                 sparse_adj=adj_dict,
-                jump_probability=jump_probability)
+                jump_probability=jump_probability,
+                graph_steps=graph_steps)
         end
     elseif rng isa Integer # each thread gets its own seeded rng
         Threads.@threads for i in 1:n_trees
@@ -130,7 +138,8 @@ function build_forest(
                 min_purity_increase,
                 adj=adj,
                 sparse_adj=adj_dict,
-                jump_probability=jump_probability)
+                jump_probability=jump_probability,
+                graph_steps=graph_steps)
         end
     else
         throw("rng must of be type Integer or Random.AbstractRNG")
