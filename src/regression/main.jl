@@ -96,6 +96,8 @@ function build_forest(
 
     if !isnothing(sparse_adj) & isnothing(adj)
         adj_dict = parse_sparse_adj_matrix_indices(sparse_adj)
+    else
+        adj_dict = nothing
     end
 
     if rng isa Random.AbstractRNG
