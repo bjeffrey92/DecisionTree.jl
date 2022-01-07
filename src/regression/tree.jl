@@ -9,6 +9,7 @@ include("../util.jl")
 
 import Random
 import Distributions
+import StatsBase
 export fit
 
 mutable struct NodeMeta{S}
@@ -268,6 +269,10 @@ function check_input(
     end
 end
 
+"""
+Search in area around each node for next node to split on
+Can jump to alternative part of the graph with probability = jump_probability
+"""
 function _fit(
     X::AbstractMatrix{S}, # feature matrix
     Y::AbstractVector{Float64}, # labels
@@ -277,6 +282,7 @@ function _fit(
     min_samples_leaf::Int,
     min_samples_split::Int,
     min_purity_increase::Float64,
+    feature_sample::Float64,
     rng = Random.GLOBAL_RNG::Random.AbstractRNG,
     adj::Union{AbstractMatrix{Int},Nothing} = nothing,
     sparse_adj = nothing,
@@ -291,7 +297,13 @@ function _fit(
     Wf = Array{U}(undef, n_samples)
 
     indX = collect(1:n_samples)
-    root = NodeMeta{S}(collect(1:n_features), 1:n_samples, 0, Vector{Int}())
+    feats = StatsBase.sample(
+        1:n_features, 
+        Int(round(feature_sample*n_features)), 
+        replace = false
+    )
+    sort!(feats)
+    root = NodeMeta{S}(feats, 1:n_samples, 0, Vector{Int}())
     stack = NodeMeta{S}[root]
 
     @inbounds while length(stack) > 0
@@ -339,6 +351,7 @@ function _fit(
                 features_adj = adj[unique(node.parent_features), :]
                 adjacent_features = [i[2] for i in findall(!iszero, features_adj)]
             end
+            adjacent_features = intersect(feats, adjacent_features)
 
             # if there aren't adjacent features call the node a leaf and move
             # on. Otherwise attempt to split the node on one of the adjacent
@@ -374,6 +387,152 @@ function _fit(
     return (root, indX)
 end
 
+
+# function _test_split(
+#     X,
+#     Y,
+#     W,
+#     node,
+#     max_features,
+#     max_depth,
+#     min_samples_leaf,
+#     min_samples_split,
+#     min_purity_increase,
+#     indX,
+#     Xf,
+#     Yf,
+#     Wf,
+#     rng,)
+#     _split!(
+#         X,
+#         Y,
+#         W,
+#         node,
+#         max_features,
+#         max_depth,
+#         min_samples_leaf,
+#         min_samples_split,
+#         min_purity_increase,
+#         indX,
+#         Xf,
+#         Yf,
+#         Wf,
+#         rng,
+#     )
+
+# end
+
+
+# function _fit_alt(
+#     X::AbstractMatrix{S}, # feature matrix
+#     Y::AbstractVector{Float64}, # labels
+#     W::AbstractVector{U}, # weights
+#     max_features::Int,
+#     max_depth::Int,
+#     min_samples_leaf::Int,
+#     min_samples_split::Int,
+#     min_purity_increase::Float64,
+#     feature_sample::Float64,
+#     rng = Random.GLOBAL_RNG::Random.AbstractRNG,
+#     adj::Union{AbstractMatrix{Int},Nothing} = nothing,
+#     sparse_adj = nothing,
+#     graph_steps = 1,
+# ) where {S,U}
+
+#     n_samples, n_features = size(X)
+
+#     Yf = Array{Float64}(undef, n_samples)
+#     Xf = Array{S}(undef, n_samples)
+#     Wf = Array{U}(undef, n_samples)
+
+#     indX = collect(1:n_samples)
+#     feats = StatsBase.sample(
+#         1:n_features, 
+#         Int(round(feature_sample*n_features)), 
+#         replace = false
+#     )
+#     sort!(feats)
+#     root = NodeMeta{S}(feats, 1:n_samples, 0, Vector{Int}())
+#     stack = NodeMeta{S}[root]
+
+#     @inbounds while length(stack) > 0
+#         node = pop!(stack)
+#         if node == root || (isnothing(adj) & isnothing(sparse_adj))
+#             _split!(
+#                 X,
+#                 Y,
+#                 W,
+#                 node,
+#                 max_features,
+#                 max_depth,
+#                 min_samples_leaf,
+#                 min_samples_split,
+#                 min_purity_increase,
+#                 indX,
+#                 Xf,
+#                 Yf,
+#                 Wf,
+#                 rng,
+#             )
+#         else
+#             if !isnothing(sparse_adj)
+#                 adjacent_features = unique(
+#                     reduce(
+#                         append!,
+#                         (sparse_adj[i] for i in node.parent_features),
+#                         init=[])
+#                 )
+#                 for _ in 2:graph_steps
+#                     next_step_features = unique(
+#                         reduce(
+#                             append!,
+#                             (sparse_adj[i] for i in adjacent_features),
+#                             init=[])
+#                     )
+#                     append!(adjacent_features, next_step_features)
+#                     unique!(adjacent_features)
+#                 end
+#             else
+#                 features_adj = adj[unique(node.parent_features), :]
+#                 adjacent_features = [i[2] for i in findall(!iszero, features_adj)]
+#             end
+#             adjacent_features = intersect(feats, adjacent_features)
+
+#             # if there aren't adjacent features call the node a leaf and move
+#             # on. Otherwise attempt to split the node on one of the adjacent
+#             # features
+#             if length(adjacent_features) == 0
+#                 node.is_leaf = true
+#             else
+#                 node.features = unique(vcat(node.parent_features, adjacent_features))
+#                 _split!(
+#                     X,
+#                     Y,
+#                     W,
+#                     node,
+#                     max_features,
+#                     max_depth,
+#                     min_samples_leaf,
+#                     min_samples_split,
+#                     min_purity_increase,
+#                     indX,
+#                     Xf,
+#                     Yf,
+#                     Wf,
+#                     rng,
+#                 )
+#             end
+#         end
+#         if !node.is_leaf
+#             fork!(node)
+#             push!(stack, node.r)
+#             push!(stack, node.l)
+#         end
+#     end
+#     return (root, indX)
+# end
+
+
 function fit(;
     X::AbstractMatrix{S},
     Y::AbstractVector{Float64},
@@ -382,6 +541,7 @@ function fit(;
     max_depth::Int,
     min_samples_leaf::Int,
     min_samples_split::Int,
+    feature_sampling::Float64,
     min_purity_increase::Float64,
     rng = Random.GLOBAL_RNG::Random.AbstractRNG,
     adj::Union{AbstractMatrix{Int},Nothing} = nothing,
@@ -398,7 +558,7 @@ function fit(;
     check_input(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, adj)
 
     root, indX =
-        _fit(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, rng, adj, sparse_adj, jump_probability, graph_steps)
+        _fit(X, Y, W, max_features, max_depth, min_samples_leaf, min_samples_split, min_purity_increase, feature_sampling, rng, adj, sparse_adj, jump_probability, graph_steps)
 
     return Tree{S}(root, indX)
 
